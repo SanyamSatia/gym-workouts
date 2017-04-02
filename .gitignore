@@ -1,0 +1,5 @@
+# Ignore executables
+*.pyc
+
+# Ignore in-progress environments
+BipedalWalker-v2
