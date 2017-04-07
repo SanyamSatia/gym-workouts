@@ -9,34 +9,37 @@ from time import sleep
 # Look into cost fn constants
 
 class AC_Network():
-    def __init__(self, state_size, action_size, scope):
+    def __init__(self, state_size, action_size, scope, optimizer):
         with tf.variable_scope(scope):
-            HIDDEN_LAYER_1_SIZE = 20
-            HIDDEN_LAYER_2_SIZE = 20
-            ALPHA = 1e-2
+            HIDDEN_LAYER_1_SIZE = 8
+            HIDDEN_LAYER_2_SIZE = 8
             W1 = 0.5
             W2 = 1.0
+            W3 = 1e-2
 
             self.input_layer = tf.placeholder(shape = [None, state_size], dtype = tf.float32)
             self.hidden_layer_1 = slim.fully_connected(self.input_layer, HIDDEN_LAYER_1_SIZE, biases_initializer = None, activation_fn = tf.nn.relu)
             # self.hidden_layer_2 = slim.fully_connected(self.hidden_layer_1, HIDDEN_LAYER_2_SIZE, biases_initializer = None, activation_fn = tf.nn.elu)
 
-            self.policy_layer = slim.fully_connected(self.hidden_layer_1, ACTION_SIZE, biases_initializer = None, activation_fn = tf.tanh)
+            self.policy_layer = slim.fully_connected(self.hidden_layer_1, action_size, biases_initializer = None, activation_fn = tf.nn.softmax)
             self.value_layer = slim.fully_connected(self.hidden_layer_1, 1, biases_initializer = None, activation_fn = None)
 
             if scope != 'global':
-                self.actions = tf.placeholder(shape = [None, action_size], dtype = tf.float32)
+                self.actions = tf.placeholder(shape = [None], dtype = tf.int32)
+                self.actions_onehot = tf.one_hot(self.actions, action_size, dtype=tf.float32)
                 self.target_value = tf.placeholder(shape = [None], dtype = tf.float32)
                 self.advantages = tf.placeholder(shape = [None], dtype = tf.float32)
+                self.responsible_outputs = tf.reduce_sum(self.policy_layer * self.actions_onehot, [1])
 
                 self.value_function_loss = tf.reduce_sum(tf.square(self.target_value - tf.reshape(self.value_layer, [-1])))
-                self.policy_loss = - tf.reduce_sum(tf.multiply(tf.transpose(tf.square(self.actions)), self.advantages))
-                self.total_loss = W1 * self.value_function_loss + W2 * self.policy_loss
+                # self.policy_loss = - tf.reduce_sum(tf.multiply(tf.transpose(tf.square(self.actions)), self.advantages))
+                self.policy_loss = - tf.reduce_sum(tf.multiply(tf.log(self.responsible_outputs), self.advantages))
+                self.entropy = - tf.reduce_sum(tf.multiply(self.policy_layer, tf.log(self.policy_layer)))
+                self.total_loss = W1 * self.value_function_loss + W2 * self.policy_loss + W3 * self.entropy
 
                 train_vars_local = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
                 self.gradients = tf.gradients(self.total_loss, train_vars_local)
 
-                optimizer = tf.train.AdamOptimizer(learning_rate = ALPHA)
                 train_vars_global = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
                 self.apply_gradients = optimizer.apply_gradients(zip(self.gradients, train_vars_global))
 
@@ -44,10 +47,18 @@ class AC_Network():
 class Worker():
     GAMMA = 0.99
 
-    def __init__(self, number, env, state_size, action_size):
+    def __init__(self, number, env, state_size, action_size, optimizer):
         self.name = 'worker_' + str(number)
-        self.local_AC_Network = AC_Network(state_size, action_size, self.name)
+        self.optimizer = optimizer
+        self.local_AC_Network = AC_Network(state_size, action_size, self.name, self.optimizer)
         self.env = env
+
+        global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
+        local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.name)
+        op_holder = []
+        for global_var, local_var in zip(global_vars, local_vars):
+            op_holder.append(local_var.assign(global_var))
+        self.update_local_network = op_holder
 
     def discount_rewards(self, rewards):
         discounted_rewards = np.zeros_like(rewards)
@@ -73,30 +84,41 @@ class Worker():
 
         feed_dict = {
             self.local_AC_Network.input_layer: np.vstack(states),
-            self.local_AC_Network.actions: np.vstack(actions),
+            self.local_AC_Network.actions: actions,
             self.local_AC_Network.target_value: discounted_rewards,
             self.local_AC_Network.advantages: advantages
         }
 
         loss, _ = sess.run([self.local_AC_Network.total_loss, self.local_AC_Network.apply_gradients], feed_dict = feed_dict)
 
-        print "Loss: %f" %(loss)
-
     def work(self, sess, coordinator):
         MAX_EPISODES = 10000
+        EPISODE_BUFFER_SIZE = 30
 
         print "Starting " + self.name
 
         with sess.as_default() and sess.graph.as_default():
             episode_count = 0
             while not coordinator.should_stop() and episode_count < MAX_EPISODES:
+                sess.run(self.update_local_network)
                 episode_history = []
                 episode_reward = 0
                 state = self.env.reset()
                 done = False
 
                 while not done:
-                    actions, value = sess.run([
+                    if len(episode_history) >= EPISODE_BUFFER_SIZE:
+                        value = sess.run(
+                                    self.local_AC_Network.value_layer,
+                                    feed_dict = {
+                                        self.local_AC_Network.input_layer: [state]
+                                    }
+                                )
+                        self.train(sess, episode_history, value[0][0])
+                        sess.run(self.update_local_network)
+                        episode_history = []
+
+                    action_dist, value = sess.run([
                         self.local_AC_Network.policy_layer,
                         self.local_AC_Network.value_layer
                     ],
@@ -104,38 +126,40 @@ class Worker():
                         self.local_AC_Network.input_layer: [state]
                     })
 
-                    actions = np.squeeze(actions)
-                    next_state, reward, done, _ = env.step(actions)
-                    episode_history.append([state, actions, reward, next_state, value[0, 0]])
+                    # actions = np.squeeze(actions)
+                    action = np.random.choice(action_dist[0], p = action_dist[0])
+                    action = np.argmax(action_dist == action)
+                    next_state, reward, done, _ = self.env.step(action)
+                    episode_history.append([state, action, reward, next_state, value[0, 0]])
                     episode_reward += reward
                     state = next_state
 
                 if len(episode_history) > 0:
                     self.train(sess, episode_history, 0.0)
 
-                print "Episode #%d: Reward: %f" %(episode_count, episode_reward)
+                print "Name: %s Episode #%d: Reward: %f" %(self.name, episode_count, episode_reward)
 
                 episode_count += 1
 
 
 if __name__ == '__main__':
-    env = gym.make('BipedalWalker-v2')
-
-    STATE_SIZE = 24
+    STATE_SIZE = 8
     ACTION_SIZE = 4
+    ALPHA = 1e-3
 
     MAX_EPISODES = 10000
-    UPDATE_FREQUENCY = 5
 
     tf.reset_default_graph()
 
     with tf.device("/cpu:0"):
-        master_network = AC_Network(STATE_SIZE, ACTION_SIZE, 'global')
+        optimizer = tf.train.AdamOptimizer(learning_rate = ALPHA)
+        master_network = AC_Network(STATE_SIZE, ACTION_SIZE, 'global', optimizer)
         num_workers = multiprocessing.cpu_count()
 
         workers = []
         for i in range(num_workers):
-            new_worker = Worker(i, env, STATE_SIZE, ACTION_SIZE)
+            env = gym.make('LunarLander-v2')
+            new_worker = Worker(i, env, STATE_SIZE, ACTION_SIZE, optimizer)
             workers.append(new_worker)
 
     with tf.Session() as sess:
