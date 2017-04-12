@@ -11,6 +11,7 @@ AGENT_HISTORY_LENGTH = 4
 DISCOUNT_FACTOR = 0.99
 MAX_GLOBAL_EPISODES = 1000
 UPDATE_FREQUENCY = 30
+RENDER_FREQUENCY = 25
 
 def get_copy_params_op(global_vars, local_vars):
     op_holder = []
@@ -60,6 +61,9 @@ class Worker():
                 while not done:
                     sess.run(self.copy_params_op)
 
+                    if episode_count % RENDER_FREQUENCY == 0 and self.name == 'worker_0':
+                        self.atari_env.render()
+
                     action_dist = sess.run(self.policy_network.action_dist, feed_dict = {self.policy_network.states: [state]})
                     action_dist = np.squeeze(action_dist)
                     action = np.random.choice(range(len(action_dist)), p = action_dist)
@@ -71,8 +75,9 @@ class Worker():
                     episode_reward += reward
 
                     if done or (episode_length != 0 and episode_length % UPDATE_FREQUENCY == 0):
-                        self.update(sess, episode_history, done)
+                        pi_loss, vf_loss = self.update(sess, episode_history, done)
                         episode_history = []
+                        # print "%s: Episode #: %d pi_loss: %f vf_loss: %f" %(self.name, episode_count, pi_loss, vf_loss)
 
                     # if self.global_counter >= MAX_GLOBAL_EPISODES:
                     #     coordinator.request_stop()
@@ -107,7 +112,11 @@ class Worker():
             self.value_network.targets: value_targets
         }
 
-        sess.run([
+        pi_loss, vf_loss, _, _ = sess.run([
+            self.policy_network.loss,
+            self.value_network.loss,
             self.policy_network_train_op,
             self.value_network_train_op
         ], feed_dict = feed_dict)
+
+        return pi_loss, vf_loss

@@ -31,6 +31,9 @@ class AtariEnvironment(object):
         # to build state arrays of size [1, AGENT_HISTORY_LENGTH, width, height]
         self.state_buffer = deque()
 
+    def render(self):
+        self.env.render()
+
     def get_initial_state(self):
         """
         Resets the atari game, clears the state buffer

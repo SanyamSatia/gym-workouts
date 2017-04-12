@@ -3,7 +3,7 @@
 import tensorflow as tf
 
 ENTROPY_WEIGHT = 1e-2
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 1e-4
 DECAY_RATE = 0.99
 MOMENTUM = 0.0
 EPSILON = 1e-6
@@ -37,7 +37,8 @@ class PolicyNetwork():
             gather_indices = tf.range(tf.shape(self.states)[0]) * tf.shape(self.action_dist)[1] + self.actions
             self.chosen_action_prob = tf.gather(tf.reshape(self.action_dist, [-1]), gather_indices)
 
-            self.loss = tf.reduce_sum(- tf.log(self.chosen_action_prob) * self.targets + ENTROPY_WEIGHT * self.entropy)
+            self.loss = tf.log(self.chosen_action_prob) * self.targets + ENTROPY_WEIGHT * self.entropy
+            self.loss = tf.reduce_sum(- self.loss)
 
             self.optimizer = tf.train.RMSPropOptimizer(LEARNING_RATE, DECAY_RATE, MOMENTUM, EPSILON)
             self.grads_and_vars = self.optimizer.compute_gradients(self.loss)
