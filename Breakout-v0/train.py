@@ -6,6 +6,7 @@ import threading
 from worker import Worker
 
 NUM_ACTIONS = 3
+CKPT_DIR = 'checkpoints/'
 
 if __name__ == '__main__':
     tf.reset_default_graph()
@@ -27,9 +28,16 @@ if __name__ == '__main__':
             )
             workers.append(new_worker)
 
+    saver = tf.train.Saver(keep_checkpoint_every_n_hours = 1, max_to_keep = 10)
+
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         coordinator = tf.train.Coordinator()
+
+        latest_ckpt = tf.train.latest_checkpoint(CKPT_DIR)
+        if latest_ckpt != None:
+            saver.restore(sess, latest_ckpt)
+            print 'Restoring last checkpoint.'
 
         worker_threads = []
         for worker in workers:
