@@ -13,7 +13,7 @@ MAX_GLOBAL_EPISODES = 1000
 UPDATE_FREQUENCY = 30
 RENDER_FREQUENCY = 25
 CKPT_DIR = 'checkpoints/'
-CKPT_FREQUENCY = 1
+CKPT_FREQUENCY = 100
 
 def get_copy_params_op(global_vars, local_vars):
     op_holder = []
