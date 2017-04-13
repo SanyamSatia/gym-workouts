@@ -14,14 +14,14 @@ if __name__ == '__main__':
     with tf.device("/cpu:0"):
         with tf.variable_scope('global'):
             policy_network = PolicyNetwork(NUM_ACTIONS)
-            value_network = ValueNetwork()
+            value_network = ValueNetwork(reuse = True)
 
         saver = tf.train.Saver(keep_checkpoint_every_n_hours = 1, max_to_keep = 10)
 
         num_workers = multiprocessing.cpu_count()
         workers = []
         for i in range(num_workers):
-            env = gym.make('Breakout-v0')
+            env = gym.make('Pong-v0')
             new_worker = Worker(
                 'worker_' + str(i),
                 env,

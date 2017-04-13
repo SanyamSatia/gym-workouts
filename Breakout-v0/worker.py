@@ -40,7 +40,7 @@ class Worker():
 
         with tf.variable_scope(self.name):
             self.policy_network = PolicyNetwork(self.global_policy_network.num_actions)
-            self.value_network = ValueNetwork()
+            self.value_network = ValueNetwork(reuse = True)
 
         self.copy_params_op = get_copy_params_op(
             tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global'),

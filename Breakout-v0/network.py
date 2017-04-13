@@ -17,7 +17,7 @@ def build_shared_network(inputs):
     return fully_connected_layer
 
 class PolicyNetwork():
-    def __init__(self, num_actions):
+    def __init__(self, num_actions, reuse = False):
         self.num_actions = num_actions
 
         self.states = tf.placeholder(shape = [None, 4, 84, 84], dtype = tf.uint8)
@@ -26,7 +26,7 @@ class PolicyNetwork():
 
         inputs = tf.to_float(self.states) / 255.0
 
-        with tf.variable_scope("shared"):
+        with tf.variable_scope("shared", reuse = reuse):
             fully_connected_layer = build_shared_network(inputs)
 
         with tf.variable_scope("policy_network"):
@@ -46,13 +46,13 @@ class PolicyNetwork():
             self.train = self.optimizer.apply_gradients(self.grads_and_vars, global_step = tf.contrib.framework.get_global_step())
 
 class ValueNetwork():
-    def __init__(self):
+    def __init__(self, reuse = False):
         self.states = tf.placeholder(shape = [None, 4, 84, 84], dtype = tf.uint8)
         self.targets = tf.placeholder(shape = [None], dtype = tf.float32)
 
         inputs = tf.to_float(self.states) / 255.0
 
-        with tf.variable_scope("shared"):
+        with tf.variable_scope("shared", reuse = reuse):
             fully_connected_layer = build_shared_network(inputs)
 
         with tf.variable_scope("value_network"):
