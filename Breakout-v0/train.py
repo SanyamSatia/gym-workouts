@@ -16,6 +16,8 @@ if __name__ == '__main__':
             policy_network = PolicyNetwork(NUM_ACTIONS)
             value_network = ValueNetwork()
 
+        saver = tf.train.Saver(keep_checkpoint_every_n_hours = 1, max_to_keep = 10)
+
         num_workers = multiprocessing.cpu_count()
         workers = []
         for i in range(num_workers):
@@ -24,11 +26,10 @@ if __name__ == '__main__':
                 'worker_' + str(i),
                 env,
                 policy_network,
-                value_network
+                value_network,
+                saver
             )
             workers.append(new_worker)
-
-    saver = tf.train.Saver(keep_checkpoint_every_n_hours = 1, max_to_keep = 10)
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())

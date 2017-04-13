@@ -12,6 +12,8 @@ DISCOUNT_FACTOR = 0.99
 MAX_GLOBAL_EPISODES = 1000
 UPDATE_FREQUENCY = 30
 RENDER_FREQUENCY = 25
+CKPT_DIR = 'checkpoints/'
+CKPT_FREQUENCY = 1
 
 def get_copy_params_op(global_vars, local_vars):
     op_holder = []
@@ -28,12 +30,13 @@ def get_train_op(local_network, global_network):
     return global_network.optimizer.apply_gradients(local_grads_global_vars, global_step = tf.contrib.framework.get_global_step())
 
 class Worker():
-    def __init__(self, name, env, policy_network, value_network):
+    def __init__(self, name, env, policy_network, value_network, saver):
         self.name = name
         self.global_policy_network = policy_network
         self.global_value_network = value_network
         self.env = env
         self.atari_env = AtariEnvironment(gym_env = self.env, resized_width = RESIZED_WIDTH, resized_height = RESIZED_HEIGHT, agent_history_length = AGENT_HISTORY_LENGTH)
+        self.saver = saver
 
         with tf.variable_scope(self.name):
             self.policy_network = PolicyNetwork(self.global_policy_network.num_actions)
@@ -61,8 +64,8 @@ class Worker():
                 while not done:
                     sess.run(self.copy_params_op)
 
-                    if episode_count % RENDER_FREQUENCY == 0 and self.name == 'worker_0':
-                        self.atari_env.render()
+                    # if episode_count % RENDER_FREQUENCY == 0 and self.name == 'worker_0':
+                    #     self.atari_env.render()
 
                     action_dist = sess.run(self.policy_network.action_dist, feed_dict = {self.policy_network.states: [state]})
                     action_dist = np.squeeze(action_dist)
@@ -83,6 +86,11 @@ class Worker():
                     #     coordinator.request_stop()
 
                 print "%s: Episode #: %d Reward: %d" %(self.name, episode_count, episode_reward)
+
+                if self.name == 'worker_0' and episode_count % CKPT_FREQUENCY == 0 and episode_count != 0:
+                    self.saver.save(sess, CKPT_DIR + 'data.ckpt')
+                    print "Checkpoint saved."
+
                 episode_count += 1
 
     def update(self, sess, episode_history, done):
