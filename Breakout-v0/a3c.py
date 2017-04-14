@@ -2,12 +2,13 @@ import gym
 from atari_environment import AtariEnvironment
 import multiprocessing
 import numpy as np
+import scipy.signal
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import threading
 from time import sleep
 
-GAMMA = 0.99
+GAMMA = 0.9
 
 def make_copy_params_op(from_scope, to_scope):
     from_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, from_scope)
@@ -19,14 +20,8 @@ def make_copy_params_op(from_scope, to_scope):
 
     return op_holder
 
-def discount_rewards(rewards):
-    discounted_rewards = np.zeros_like(rewards)
-    total = 0
-    for i in reversed(xrange(0, rewards.size)):
-        total = total * GAMMA + rewards[i]
-        discounted_rewards[i] = total
-
-    return discounted_rewards
+def discount(x):
+    return scipy.signal.lfilter([1], [1, -GAMMA], x[::-1], axis=0)[::-1]
 
 class AC_Network():
     def __init__(self, action_size, scope, optimizer):
@@ -54,7 +49,7 @@ class AC_Network():
                 self.policy_loss = - tf.reduce_sum(tf.log(self.chosen_actions) * self.advantages)
                 self.entropy = - tf.reduce_sum(self.policy_layer * tf.log(self.policy_layer))
 
-                self.total_loss = 0.5 * self.value_function_loss + self.policy_loss + 0.01 * self.entropy
+                self.total_loss = 0.5 * self.value_function_loss + self.policy_loss - 0.01 * self.entropy
 
                 train_vars_local = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
                 self.gradients = tf.gradients(self.total_loss, train_vars_local)
@@ -66,7 +61,6 @@ class AC_Network():
 
 
 class Worker():
-    GAMMA
     MAX_EPISODE_COUNT = 1000
 
     def __init__(self, number, env, action_size, optimizer, global_episode_count):
@@ -93,10 +87,10 @@ class Worker():
         values = rollout[:, 4]
 
         self.rewards_plus = np.asarray(rewards.tolist() + [bootstrap_value])
-        discounted_rewards = discount_rewards(self.rewards_plus)[:-1]
+        discounted_rewards = discount(self.rewards_plus)[:-1]
         self.value_plus = np.asarray(values.tolist() + [bootstrap_value])
         advantages = rewards + GAMMA * self.value_plus[1:] - self.value_plus[:-1]
-        advantages = discount_rewards(advantages)
+        advantages = discount(advantages)
 
         feed_dict = {
             self.local_AC_Network.input_layer: np.array(states.tolist()),
@@ -105,17 +99,18 @@ class Worker():
             self.local_AC_Network.advantages: advantages
         }
 
-        loss, grad_norms, var_norms, _ = sess.run([
+        vf_loss, pi_loss, entropy, loss, _ = sess.run([
+            self.local_AC_Network.value_function_loss,
+            self.local_AC_Network.policy_loss,
+            self.local_AC_Network.entropy,
             self.local_AC_Network.total_loss,
-            self.local_AC_Network.grad_norms,
-            self.local_AC_Network.var_norms,
             self.local_AC_Network.apply_gradients
         ], feed_dict = feed_dict)
 
-        return loss, grad_norms, var_norms
+        return vf_loss, pi_loss, entropy, loss
 
     def work(self, sess, coordinator):
-        MAX_EPISODES = 10000
+        MAX_EPISODES = 1000
         EPISODE_BUFFER_SIZE = 30
 
         print "Starting " + self.name
@@ -154,14 +149,14 @@ class Worker():
                             }
                         )
                         value = np.squeeze(value)
-                        loss, grad_norms, var_norms = self.train(sess, episode_history, value)
+                        vf_loss, pi_loss, entropy, loss = self.train(sess, episode_history, value)
                         episode_history = []
 
                 if len(episode_history) > 0:
-                    loss, grad_norms, var_norms = self.train(sess, episode_history, 0.0)
+                    vf_loss, pi_loss, entropy, loss = self.train(sess, episode_history, 0.0)
 
                 if self.name == "worker_0":
-                    print "Episode #%d: Loss: %f Reward: %f" %(episode_count, loss, episode_reward)
+                    print "Episode #%d:\nvf_loss: %f pi_loss: %f entropy: %f\nLoss: %f Reward: %f" %(episode_count, vf_loss, pi_loss, entropy, loss, episode_reward)
                     sess.run(self.increment_global_episode_count)
 
                 episode_count += 1
@@ -169,9 +164,7 @@ class Worker():
 
 if __name__ == '__main__':
     ACTION_SIZE = 3
-    ALPHA = 1e-4
-
-    MAX_EPISODES = 10000
+    ALPHA = 1e-3
 
     tf.reset_default_graph()
 
@@ -179,7 +172,7 @@ if __name__ == '__main__':
         global_episode_count = tf.Variable(0, dtype = tf.int32, trainable = False)
         optimizer = tf.train.AdamOptimizer(learning_rate = ALPHA)
         master_network = AC_Network(ACTION_SIZE, 'global', optimizer)
-        num_workers = multiprocessing.cpu_count()
+        num_workers = 2 #multiprocessing.cpu_count()
 
         workers = []
         for i in range(num_workers):
