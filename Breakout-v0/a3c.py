@@ -53,8 +53,8 @@ class AC_Network():
 
                 train_vars_local = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
                 self.gradients = tf.gradients(self.total_loss, train_vars_local)
-                self.var_norms = tf.global_norm(train_vars_local)
-                grads, self.grad_norms = tf.clip_by_global_norm(self.gradients, 40.0)
+                self.var_norm = tf.global_norm(train_vars_local)
+                grads, self.grad_norm = tf.clip_by_global_norm(self.gradients, 40.0)
 
                 train_vars_global = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
                 self.apply_gradients = optimizer.apply_gradients(zip(grads, train_vars_global))
@@ -67,6 +67,7 @@ class Worker():
         RESIZED_WIDTH = 84
         RESIZED_HEIGHT = 84
         AGENT_HISTORY_LENGTH = 4
+        LOG_DIR = 'logs/'
 
         self.name = 'worker_' + str(number)
         self.optimizer = optimizer
@@ -75,6 +76,11 @@ class Worker():
         self.num_actions = action_size
         self.global_episode_count = global_episode_count
         self.increment_global_episode_count = self.global_episode_count.assign_add(1)
+        self.summary_writer = tf.summary.FileWriter(LOG_DIR + self.name)
+
+        self.episode_rewards = []
+        self.episode_lengths = []
+        self.episode_mean_values = []
 
         self.update_local_network = make_copy_params_op('global', self.name)
 
@@ -99,19 +105,22 @@ class Worker():
             self.local_AC_Network.advantages: advantages
         }
 
-        vf_loss, pi_loss, entropy, loss, _ = sess.run([
+        vf_loss, pi_loss, entropy, loss, grad_norm, var_norm, _ = sess.run([
             self.local_AC_Network.value_function_loss,
             self.local_AC_Network.policy_loss,
             self.local_AC_Network.entropy,
             self.local_AC_Network.total_loss,
+            self.local_AC_Network.grad_norm,
+            self.local_AC_Network.var_norm,
             self.local_AC_Network.apply_gradients
         ], feed_dict = feed_dict)
 
-        return vf_loss, pi_loss, entropy, loss
+        return vf_loss, pi_loss, entropy, loss, grad_norm, var_norm
 
     def work(self, sess, coordinator):
         MAX_EPISODES = 1000
         EPISODE_BUFFER_SIZE = 30
+        LOG_FREQUENCY = 2
 
         print "Starting " + self.name
 
@@ -121,6 +130,7 @@ class Worker():
             while not coordinator.should_stop():
                 sess.run(self.update_local_network)
                 episode_history = []
+                episode_values = []
                 episode_reward = 0
                 state = self.env.get_initial_state()
                 done = False
@@ -139,6 +149,7 @@ class Worker():
                     value = np.squeeze(value)
                     next_state, reward, done, _ = self.env.step(action)
                     episode_history.append([state, action, reward, next_state, value])
+                    episode_values.append(value)
                     episode_reward += reward
                     state = next_state
 
@@ -149,13 +160,36 @@ class Worker():
                             }
                         )
                         value = np.squeeze(value)
-                        vf_loss, pi_loss, entropy, loss = self.train(sess, episode_history, value)
+                        vf_loss, pi_loss, entropy, loss, grad_norm, var_norm = self.train(sess, episode_history, value)
                         episode_history = []
 
+                self.episode_rewards.append(episode_reward)
+                self.episode_lengths.append(len(episode_values))
+                self.episode_mean_values.append(np.mean(episode_values))
+
                 if len(episode_history) > 0:
-                    vf_loss, pi_loss, entropy, loss = self.train(sess, episode_history, 0.0)
+                    vf_loss, pi_loss, entropy, loss, grad_norm, var_norm = self.train(sess, episode_history, 0.0)
+
+                if episode_count % LOG_FREQUENCY == 0 and episode_count != 0:
+                    mean_reward = np.mean(self.episode_rewards[-LOG_FREQUENCY:])
+                    mean_length = np.mean(self.episode_lengths[-LOG_FREQUENCY:])
+                    mean_value = np.mean(self.episode_mean_values[-LOG_FREQUENCY:])
+
+                    summary = tf.Summary()
+                    summary.value.add(tag = 'Perf/Reward', simple_value = float(mean_reward))
+                    summary.value.add(tag = 'Perf/Length', simple_value = float(mean_length))
+                    summary.value.add(tag = 'Perf/Value', simple_value = float(mean_value))
+                    summary.value.add(tag = 'Losses/Value Loss', simple_value = float(vf_loss))
+                    summary.value.add(tag = 'Losses/Policy Loss', simple_value = float(pi_loss))
+                    summary.value.add(tag = 'Losses/Entropy', simple_value = float(entropy))
+                    summary.value.add(tag = 'Losses/Total', simple_value = float(loss))
+                    summary.value.add(tag = 'Losses/Grad Norm', simple_value = float(grad_norm))
+                    summary.value.add(tag = 'Losses/Var Norm', simple_value = float(var_norm))
+                    self.summary_writer.add_summary(summary, episode_count)
+                    self.summary_writer.flush()
 
                 if self.name == "worker_0":
+
                     print "Episode #%d:\nvf_loss: %f pi_loss: %f entropy: %f\nLoss: %f Reward: %f" %(episode_count, vf_loss, pi_loss, entropy, loss, episode_reward)
                     sess.run(self.increment_global_episode_count)
 
