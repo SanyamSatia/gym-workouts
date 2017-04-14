@@ -11,6 +11,7 @@ import threading
 from time import sleep
 
 GAMMA = 0.99
+CKPT_DIR = 'checkpoints/'
 
 def make_copy_params_op(from_scope, to_scope):
     from_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, from_scope)
@@ -166,9 +167,10 @@ class Worker():
 
         return vf_loss, pi_loss, entropy, loss, grad_norm, var_norm
 
-    def work(self, sess, coordinator):
+    def work(self, sess, coordinator, saver):
         MAX_EPISODES = 1000
-        EPISODE_BUFFER_SIZE = 30
+        EPISODE_BUFFER_SIZE = 40
+        CKPT_FREQUENCY = 100
         LOG_FREQUENCY = 2
 
         print "Starting " + self.name
@@ -245,24 +247,26 @@ class Worker():
                     self.summary_writer.flush()
 
                 if self.name == "worker_0":
-
-                    print "Episode #%d:\nvf_loss: %f pi_loss: %f entropy: %f\nLoss: %f Reward: %f" %(episode_count, vf_loss, pi_loss, entropy, loss, episode_reward)
                     sess.run(self.increment_global_episode_count)
+                    if episode_count % CKPT_FREQUENCY == 0 and episode_count != 0:
+                        saver.save(sess, CKPT_DIR + str(episode_count) + '.ckpt')
+                        print "Episode: %d: Checkpoint saved." %(episode_count)
 
                 episode_count += 1
 
 
 if __name__ == '__main__':
     ACTION_SIZE = 3
-    ALPHA = 1e-3
+    ALPHA = 1e-4
 
     tf.reset_default_graph()
 
-    with tf.device("/cpu:0"):
+    with tf.device('/cpu:0'):
         global_episode_count = tf.Variable(0, dtype = tf.int32, trainable = False)
-        optimizer = tf.train.AdamOptimizer(learning_rate = ALPHA)
+        # optimizer = tf.train.AdamOptimizer(learning_rate = ALPHA)
+        optimizer = tf.train.RMSPropOptimizer(learning_rate = ALPHA, decay = 0.99, epsilon = 1e-5)
         master_network = AC_Network(ACTION_SIZE, 'global', optimizer)
-        num_workers = 2 #multiprocessing.cpu_count()
+        num_workers = multiprocessing.cpu_count()
 
         workers = []
         for i in range(num_workers):
@@ -270,13 +274,20 @@ if __name__ == '__main__':
             new_worker = Worker(i, env, ACTION_SIZE, optimizer, global_episode_count)
             workers.append(new_worker)
 
+        saver = tf.train.Saver()
+
     with tf.Session() as sess:
         coordinator = tf.train.Coordinator()
         sess.run(tf.global_variables_initializer())
 
+        latest_ckpt = tf.train.latest_checkpoint(CKPT_DIR)
+        if latest_ckpt != None:
+            saver.restore(sess, latest_ckpt)
+            print 'Restoring last checkpoint.'
+
         worker_threads = []
         for worker in workers:
-            work = lambda: worker.work(sess, coordinator)
+            work = lambda: worker.work(sess, coordinator, saver)
             thread = threading.Thread(target = (work))
             thread.start()
             sleep(0.5)
