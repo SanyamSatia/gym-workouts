@@ -1,14 +1,16 @@
+# Based on https://github.com/awjuliani/DeepRL-Agents/blob/master/A3C-Doom.ipynb
+
 import gym
-from atari_environment import AtariEnvironment
 import multiprocessing
 import numpy as np
 import scipy.signal
+from skimage.color import rgb2gray
 import tensorflow as tf
 import tensorflow.contrib.slim as slim
 import threading
 from time import sleep
 
-GAMMA = 0.9
+GAMMA = 0.99
 
 def make_copy_params_op(from_scope, to_scope):
     from_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, from_scope)
@@ -23,19 +25,63 @@ def make_copy_params_op(from_scope, to_scope):
 def discount(x):
     return scipy.signal.lfilter([1], [1, -GAMMA], x[::-1], axis=0)[::-1]
 
+def process_frame(frame):
+    s = rgb2gray(frame)
+    s = scipy.misc.imresize(s,[84,84])
+    s = np.reshape(s,[np.prod(s.shape)]) / 255.0
+    return s
+
+def normalized_columns_initializer(std=1.0):
+    def _initializer(shape, dtype = None, partition_info = None):
+        out = np.random.randn(*shape).astype(np.float32)
+        out *= std / np.sqrt(np.square(out).sum(axis=0, keepdims=True))
+        return tf.constant(out)
+    return _initializer
+
 class AC_Network():
     def __init__(self, action_size, scope, optimizer):
         with tf.variable_scope(scope):
             self.num_actions = action_size
 
-            self.input_layer = tf.placeholder(shape = [None, 4, 84, 84], dtype = tf.float32)
-            normalized_input = tf.div(tf.to_float(self.input_layer), 255.0)
-            convolution_layer_1 = tf.contrib.layers.conv2d(normalized_input, 16, 8, 4, activation_fn = tf.nn.relu)
-            convolution_layer_2 = tf.contrib.layers.conv2d(convolution_layer_1, 32, 4, 2, activation_fn = tf.nn.relu)
+            self.input_layer = tf.placeholder(shape = [None, 7056], dtype = tf.float32)
+            input_layer_rehsaped = tf.reshape(self.input_layer, shape = [-1, 84, 84, 1])
+            convolution_layer_1 = slim.conv2d(input_layer_rehsaped, num_outputs = 16, kernel_size = [8, 8], stride = [4, 4], padding = 'VALID', activation_fn = tf.nn.elu)
+            convolution_layer_2 = slim.conv2d(convolution_layer_1, num_outputs = 32, kernel_size = [4, 4], stride = [2, 2], padding = 'VALID', activation_fn = tf.nn.elu)
             fully_connected_layer = tf.contrib.layers.fully_connected(tf.contrib.layers.flatten(convolution_layer_2), 256)
 
-            self.policy_layer = tf.contrib.layers.fully_connected(fully_connected_layer, self.num_actions, activation_fn = tf.nn.softmax)
-            self.value_layer = tf.contrib.layers.fully_connected(fully_connected_layer, 1, activation_fn = None)
+            lstm_cell = tf.contrib.rnn.BasicLSTMCell(256, state_is_tuple = True)
+            c_init = np.zeros((1, lstm_cell.state_size.c), np.float32)
+            h_init = np.zeros((1, lstm_cell.state_size.h), np.float32)
+            self.state_init = [c_init, h_init]
+            c_in = tf.placeholder(tf.float32, [1, lstm_cell.state_size.c])
+            h_in = tf.placeholder(tf.float32, [1, lstm_cell.state_size.h])
+            self.state_input = (c_in, h_in)
+            rnn_input = tf.expand_dims(fully_connected_layer, [0])
+            step_size = tf.shape(self.input_layer)[:1]
+            state_in = tf.contrib.rnn.LSTMStateTuple(c_in, h_in)
+            lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
+                lstm_cell,
+                rnn_input,
+                initial_state = state_in,
+                sequence_length = step_size,
+                time_major = False
+            )
+            lstm_c, lstm_h = lstm_state
+            self.state_out = (lstm_c[:1, :], lstm_h[:1, :])
+            rnn_out = tf.reshape(lstm_outputs, [-1, 256])
+
+            self.policy_layer = tf.contrib.layers.fully_connected(
+                rnn_out,
+                self.num_actions,
+                weights_initializer = normalized_columns_initializer(0.01),
+                activation_fn = tf.nn.softmax
+            )
+            self.value_layer = tf.contrib.layers.fully_connected(
+                rnn_out,
+                1,
+                weights_initializer = normalized_columns_initializer(1.0),
+                activation_fn = None
+            )
 
             if scope != 'global':
                 self.actions = tf.placeholder(shape = [None], dtype = tf.int32)
@@ -46,8 +92,8 @@ class AC_Network():
                 self.chosen_actions = tf.reduce_sum(self.policy_layer * self.actions_onehot, [1])
 
                 self.value_function_loss = tf.reduce_sum(tf.squared_difference(self.target_values, tf.reshape(self.value_layer, [-1])))
-                self.policy_loss = - tf.reduce_sum(tf.log(self.chosen_actions) * self.advantages)
-                self.entropy = - tf.reduce_sum(self.policy_layer * tf.log(self.policy_layer))
+                self.policy_loss = - tf.reduce_sum(tf.log(self.chosen_actions + 1e-5) * self.advantages)
+                self.entropy = - tf.reduce_sum(self.policy_layer * tf.log(self.policy_layer + 1e-5))
 
                 self.total_loss = 0.5 * self.value_function_loss + self.policy_loss - 0.01 * self.entropy
 
@@ -72,7 +118,7 @@ class Worker():
         self.name = 'worker_' + str(number)
         self.optimizer = optimizer
         self.local_AC_Network = AC_Network(action_size, self.name, self.optimizer)
-        self.env = AtariEnvironment(gym_env = env, resized_width = RESIZED_WIDTH, resized_height = RESIZED_HEIGHT, agent_history_length = AGENT_HISTORY_LENGTH)
+        self.env = env
         self.num_actions = action_size
         self.global_episode_count = global_episode_count
         self.increment_global_episode_count = self.global_episode_count.assign_add(1)
@@ -98,11 +144,14 @@ class Worker():
         advantages = rewards + GAMMA * self.value_plus[1:] - self.value_plus[:-1]
         advantages = discount(advantages)
 
+        rnn_state = self.local_AC_Network.state_init
         feed_dict = {
             self.local_AC_Network.input_layer: np.array(states.tolist()),
             self.local_AC_Network.actions: actions,
             self.local_AC_Network.target_values: discounted_rewards,
-            self.local_AC_Network.advantages: advantages
+            self.local_AC_Network.advantages: advantages,
+            self.local_AC_Network.state_input[0]: rnn_state[0],
+            self.local_AC_Network.state_input[1]: rnn_state[1]
         }
 
         vf_loss, pi_loss, entropy, loss, grad_norm, var_norm, _ = sess.run([
@@ -132,22 +181,27 @@ class Worker():
                 episode_history = []
                 episode_values = []
                 episode_reward = 0
-                state = self.env.get_initial_state()
+                state = process_frame(self.env.reset())
                 done = False
+                rnn_state = self.local_AC_Network.state_init
 
                 while not done:
-                    action_dist, value = sess.run([
+                    action_dist, value, rnn_state = sess.run([
                         self.local_AC_Network.policy_layer,
-                        self.local_AC_Network.value_layer
+                        self.local_AC_Network.value_layer,
+                        self.local_AC_Network.state_out
                     ],
                     feed_dict = {
-                        self.local_AC_Network.input_layer: [state]
+                        self.local_AC_Network.input_layer: [state],
+                        self.local_AC_Network.state_input[0]: rnn_state[0],
+                        self.local_AC_Network.state_input[1]: rnn_state[1]
                     })
 
                     action_dist = np.squeeze(action_dist)
                     action = np.random.choice(range(len(action_dist)), p = action_dist)
                     value = np.squeeze(value)
                     next_state, reward, done, _ = self.env.step(action)
+                    next_state = process_frame(next_state)
                     episode_history.append([state, action, reward, next_state, value])
                     episode_values.append(value)
                     episode_reward += reward
@@ -156,7 +210,9 @@ class Worker():
                     if len(episode_history) >= EPISODE_BUFFER_SIZE and not done:
                         value = sess.run(self.local_AC_Network.value_layer,
                             feed_dict = {
-                                self.local_AC_Network.input_layer: [state]
+                                self.local_AC_Network.input_layer: [state],
+                                self.local_AC_Network.state_input[0]: rnn_state[0],
+                                self.local_AC_Network.state_input[1]: rnn_state[1]
                             }
                         )
                         value = np.squeeze(value)
