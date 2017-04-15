@@ -71,13 +71,13 @@ class AC_Network():
             self.state_out = (lstm_c[:1, :], lstm_h[:1, :])
             rnn_out = tf.reshape(lstm_outputs, [-1, 256])
 
-            self.policy_layer = tf.contrib.layers.fully_connected(
+            self.policy_layer = slim.fully_connected(
                 rnn_out,
                 self.num_actions,
                 weights_initializer = normalized_columns_initializer(0.01),
                 activation_fn = tf.nn.softmax
             )
-            self.value_layer = tf.contrib.layers.fully_connected(
+            self.value_layer = slim.fully_connected(
                 rnn_out,
                 1,
                 weights_initializer = normalized_columns_initializer(1.0),
@@ -92,7 +92,7 @@ class AC_Network():
 
                 self.chosen_actions = tf.reduce_sum(self.policy_layer * self.actions_onehot, [1])
 
-                self.value_function_loss = tf.reduce_sum(tf.squared_difference(self.target_values, tf.reshape(self.value_layer, [-1])))
+                self.value_function_loss = 0.5 * tf.reduce_sum(tf.squared_difference(self.target_values, tf.reshape(self.value_layer, [-1])))
                 self.policy_loss = - tf.reduce_sum(tf.log(self.chosen_actions + 1e-5) * self.advantages)
                 self.entropy = - tf.reduce_sum(self.policy_layer * tf.log(self.policy_layer + 1e-5))
 
@@ -165,7 +165,7 @@ class Worker():
             self.local_AC_Network.apply_gradients
         ], feed_dict = feed_dict)
 
-        return vf_loss, pi_loss, entropy, loss, grad_norm, var_norm
+        return vf_loss / len(rollout), pi_loss / len(rollout), entropy / len(rollout), loss / len(rollout), grad_norm, var_norm
 
     def work(self, sess, coordinator, saver):
         MAX_EPISODES = 1000
