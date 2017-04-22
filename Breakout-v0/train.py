@@ -6,7 +6,7 @@ import tensorflow as tf
 import threading
 from worker import Worker
 
-NUM_ACTIONS = 3
+NUM_ACTIONS = 6
 CKPT_DIR = 'checkpoints/'
 EXP_DIR = 'exp/'
 
