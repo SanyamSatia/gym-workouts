@@ -1,4 +1,5 @@
 import gym
+from gym import wrappers
 import multiprocessing
 from network import PolicyNetwork, ValueNetwork
 import tensorflow as tf
@@ -7,6 +8,7 @@ from worker import Worker
 
 NUM_ACTIONS = 3
 CKPT_DIR = 'checkpoints/'
+EXP_DIR = 'exp/'
 
 if __name__ == '__main__':
     tf.reset_default_graph()
@@ -22,6 +24,7 @@ if __name__ == '__main__':
         workers = []
         for i in range(num_workers):
             env = gym.make('SpaceInvaders-v0')
+            env = wrappers.Monitor(env, EXP_DIR + 'SpaceInvaders-v0-exp-1')
             new_worker = Worker(
                 'worker_' + str(i),
                 env,
