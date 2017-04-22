@@ -3,16 +3,14 @@
 import tensorflow as tf
 
 ENTROPY_WEIGHT = 1e-2
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-3
 DECAY_RATE = 0.99
-MOMENTUM = 0.0
-EPSILON = 1e-6
 
 def build_shared_network(inputs):
     convolution_layer_1 = tf.contrib.layers.conv2d(inputs, 16, 8, 4, activation_fn = tf.nn.relu)
     convolution_layer_2 = tf.contrib.layers.conv2d(convolution_layer_1, 32, 4, 2, activation_fn = tf.nn.relu)
 
-    fully_connected_layer = tf.contrib.layers.fully_connected(tf.contrib.layers.flatten(convolution_layer_2), 256)
+    fully_connected_layer = tf.contrib.layers.fully_connected(tf.contrib.layers.flatten(convolution_layer_2), 256, activation_fn = tf.nn.relu)
 
     return fully_connected_layer
 
@@ -40,7 +38,7 @@ class PolicyNetwork():
             self.loss = tf.log(self.chosen_action_prob) * self.targets + ENTROPY_WEIGHT * self.entropy
             self.loss = tf.reduce_sum(- self.loss)
 
-            self.optimizer = tf.train.RMSPropOptimizer(LEARNING_RATE, DECAY_RATE, MOMENTUM, EPSILON)
+            self.optimizer = tf.train.RMSPropOptimizer(learning_rate = LEARNING_RATE, decay = DECAY_RATE)
             self.grads_and_vars = self.optimizer.compute_gradients(self.loss)
             self.grads_and_vars = [[grad, var] for grad, var in self.grads_and_vars if grad is not None]
             self.train = self.optimizer.apply_gradients(self.grads_and_vars, global_step = tf.contrib.framework.get_global_step())
@@ -61,7 +59,7 @@ class ValueNetwork():
 
             self.loss = tf.reduce_sum(tf.squared_difference(self.logits, self.targets))
 
-            self.optimizer = tf.train.RMSPropOptimizer(LEARNING_RATE, DECAY_RATE, MOMENTUM, EPSILON)
+            self.optimizer = tf.train.RMSPropOptimizer(learning_rate = LEARNING_RATE, decay = DECAY_RATE)
             self.grads_and_vars = self.optimizer.compute_gradients(self.loss)
             self.grads_and_vars = [[grad, var] for grad, var in self.grads_and_vars if grad is not None]
             self.train = self.optimizer.apply_gradients(self.grads_and_vars, global_step = tf.contrib.framework.get_global_step())

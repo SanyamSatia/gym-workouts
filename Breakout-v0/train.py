@@ -21,7 +21,7 @@ if __name__ == '__main__':
         num_workers = multiprocessing.cpu_count()
         workers = []
         for i in range(num_workers):
-            env = gym.make('Pong-v0')
+            env = gym.make('SpaceInvaders-v0')
             new_worker = Worker(
                 'worker_' + str(i),
                 env,

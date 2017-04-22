@@ -10,7 +10,7 @@ RESIZED_HEIGHT = 84
 AGENT_HISTORY_LENGTH = 4
 DISCOUNT_FACTOR = 0.99
 MAX_GLOBAL_EPISODES = 1000
-UPDATE_FREQUENCY = 30
+UPDATE_FREQUENCY = 5
 RENDER_FREQUENCY = 25
 CKPT_DIR = 'checkpoints/'
 CKPT_FREQUENCY = 100
@@ -77,7 +77,7 @@ class Worker():
                     episode_length += 1
                     episode_reward += reward
 
-                    if done or (episode_length != 0 and episode_length % UPDATE_FREQUENCY == 0):
+                    if done or episode_length % UPDATE_FREQUENCY == 0:
                         pi_loss, vf_loss = self.update(sess, episode_history, done)
                         episode_history = []
                         # print "%s: Episode #: %d pi_loss: %f vf_loss: %f" %(self.name, episode_count, pi_loss, vf_loss)
