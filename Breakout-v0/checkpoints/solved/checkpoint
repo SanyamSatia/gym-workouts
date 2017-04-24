@@ -1,0 +1,6 @@
+model_checkpoint_path: "/tmp/pong/train/model.ckpt-2905361"
+all_model_checkpoint_paths: "/tmp/pong/train/model.ckpt-2883922"
+all_model_checkpoint_paths: "/tmp/pong/train/model.ckpt-2889329"
+all_model_checkpoint_paths: "/tmp/pong/train/model.ckpt-2894746"
+all_model_checkpoint_paths: "/tmp/pong/train/model.ckpt-2900087"
+all_model_checkpoint_paths: "/tmp/pong/train/model.ckpt-2905361"
